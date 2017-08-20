@@ -1,0 +1,185 @@
+---
+title: 'Reproducible Research: Course Project 2'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Severe weather events and their economic and human health effects  in the United States: 1950 - 2011
+
+## Synopsis
+Using data from the NOAA Storm Database, we analyse the economic and human health effects of the observed weather events over the  period 1950 - 2011. While tornadoes have had the most signifant impact on human health, hurricanes and floods have had the greatest economic impact.
+
+## Data Processing
+
+### Read data from compressed csv
+
+```{r, cache=TRUE}
+data <- read.csv("repdata%2Fdata%2FStormData.csv.bz2")
+```
+
+### Parse dates
+
+```{r, message=FALSE}
+library(lubridate)
+data$BGN_DATE <- mdy_hms(data$BGN_DATE)
+```
+
+### Normalize damages
+
+Assume that CROPDMGEXP and PROPDMGEXP express an optional power of 10 multiplier for CROPDMG and PROPDMG respectively.
+
+```{r, cache=TRUE}
+multiplier <- function(exp) {
+  if (exp == 'k' | exp == 'K') 10**3
+  else if (exp == 'm' | exp == 'M') 10**6
+  else if (exp == 'b' | exp == 'B') 10**9
+  else 1
+}
+
+CROPDMG_EXPANDED = 
+  with(data,
+    CROPDMG * sapply(CROPDMGEXP, multiplier))
+
+PROPDMG_EXPANDED = 
+  with(data,
+    PROPDMG * sapply(PROPDMGEXP, multiplier))
+
+data$TOTAL_DAMAGES = PROPDMG_EXPANDED + CROPDMG_EXPANDED
+
+```
+
+### Repair erroneous outlier record
+
+Update Record 605943, which is the furthest outlier, and whose REMARKS indicate that the damages were around 70 million.
+```{r}
+data$TOTAL_DAMAGES[data$REFNUM == 605943] = 70 * 10**6
+```
+
+### Normalize EVTYPE factor levels
+```{r, message=FALSE}
+library(dplyr)
+
+normalize_evtype_level <- function(level) {
+  trimws(
+  gsub(".*heat.*", "heat wave",
+  gsub(".*extreme.*|.*excessive.*|.*extended.*", "extreme/excessive/extended weather", 
+  gsub(".*summary.*", "summary",
+  gsub(".*record.*", "record weather events", 
+  gsub(".*drought.*", "drought",
+  gsub(".*sleet.*", "sleet",
+  gsub(".*hail.*", "hail",
+  gsub(".*snow.*|.*blizzard.*", "snow/blizzard",
+  gsub(".*rain.*|.*precipitation.*", "rain/precipitation",
+  gsub(".*flood.*|.*fld.*", "flood",
+  gsub(".*surf.*|.*swell.*", "surf/swells",
+  gsub(".*hurricane.*", "hurricane",
+  gsub(".*tornado.*", "tornado",
+  gsub(".*volcan.*", "volcanic activity", 
+  gsub(".*unseasonabl.*|.*unseasonal.*|.*unusual.*|.*abnormal.*", "unseasonable / abnormal weather", 
+  gsub(".*tropical storm.*", "tropical storm",
+  gsub(".*land[ ]*slide.*", "landslide",
+  gsub(".*mud[ ]*slide.*", "mudslide",
+  gsub(".*winter weather.*|.*winter.*mix.*|.*winter storm.*", "winter weather/winter storms",
+  gsub(".*thunderstorm.*|.*thundertorm.*|.*thunderstrom.*|.*tunderstorm.*|.*thundersnow.*|.*thuderstorm.*|.*thundeerstorm.*|.*thundertsorm.*|.*thunderstorm.*|.*thunerstorm.*|.thunderestorm.*", "thunderstorm", 
+  gsub(".*tstm","thunderstorm", 
+  gsub(".*wild[ ]?fire.*|.*wildforest fire.*","wildfire", 
+  gsub('mph$','',
+  gsub('[0-9()./\\-]',"", 
+  tolower(level)
+  )))))))))))))))))))))))))
+}
+
+normalized_evtype_levels <- sapply(levels(data$EVTYPE), normalize_evtype_level)
+
+normalized_evtype_levels_frame <- data.frame(
+  EVTYPE = names(normalized_evtype_levels), 
+  EVTYPE_NORMALIZED = normalized_evtype_levels)
+
+rownames(normalized_evtype_levels_frame) <- c() # remove rownames
+
+normalized_data <- left_join(data, normalized_evtype_levels_frame, by=c("EVTYPE"))
+
+# assert that the left join preserved the number of rows...
+assertthat::are_equal(dim(data)[1], dim(normalized_data)[1])
+
+# ...and added only 1 column
+assertthat::are_equal(dim(data)[2], dim(normalized_data)[2]-1)
+```
+
+## Which event has had the greatest impact on human health?
+
+### Fatalities
+
+```{r}
+library(ggplot2)
+
+fatalities_by_event <- normalized_data %>%
+  group_by(event = EVTYPE_NORMALIZED) %>%
+  summarise(cnt = sum(FATALITIES)) %>%
+  arrange(desc(cnt))
+
+ggplot(head(fatalities_by_event, 15), aes(x = reorder(event, cnt), y = cnt)) + 
+  geom_point() + 
+  ggtitle("Deadliest Events\n") + 
+  ylab("Fatalities") +
+  xlab("") +
+  theme(
+    axis.text.x=element_text(angle=45,hjust=1,vjust=1),
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+Tornadoes have resulted in the greatest amount of fatalities.
+
+### Injuries
+
+```{r}
+injuries_by_event <- normalized_data %>%
+  group_by(event = EVTYPE_NORMALIZED) %>%
+  summarise(cnt = sum(INJURIES)) %>%
+  arrange(desc(cnt))
+
+ggplot(head(injuries_by_event, 15), aes(x = reorder(event, cnt), y = cnt)) + 
+  geom_point() + 
+  ggtitle("Injurious Events\n") + 
+  ylab("Injuries") +
+  xlab("") +
+  theme(
+    axis.text.x=element_text(angle=45,hjust=1,vjust=1),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+```
+
+Tornadoes have resulted in the greatest amount of injuries.
+
+## Which event has had the greatest economic consequences?
+
+```{r}
+damages_by_event <- normalized_data %>%
+  group_by(event = EVTYPE_NORMALIZED) %>%
+  summarise(total_damages_millions = sum(TOTAL_DAMAGES) / 10**9) %>%
+  arrange(desc(total_damages_millions))
+
+ggplot(head(damages_by_event, 15), aes(x = reorder(event, total_damages_millions), y = total_damages_millions)) + 
+  geom_point() + 
+  ggtitle("Economic Impact of Events\n") + 
+  ylab("Damages (billions USD)") +
+  xlab("") +
+  theme(
+    axis.text.x=element_text(angle=45,hjust=1,vjust=1),
+    plot.title = element_text(hjust = 0.5),
+    plot.margin=margin(0,0,0,60)
+  )
+```
+
+In terms of economic impact, floods and hurricanes have had the greatest impact.
+
+## Results
+
+Tornadoes have had the most signifant impact on human health. Hurricanes and floods have had the greatest economic impact.
